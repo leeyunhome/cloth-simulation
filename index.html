@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloth Lab — a cloth simulation from scratch</title>
+<meta name="description" content="Mass-spring cloth simulation built from scratch: position Verlet + constraint relaxation, a C++17 core with 290 unit-test assertions, and a raw WebGL2 demo with a procedural weave shader. 의상 시뮬레이션의 기본기를 물리부터 셰이더까지 직접 구현한 기록.">
+<meta property="og:title" content="Cloth Lab — a cloth simulation from scratch">
+<meta property="og:description" content="Position Verlet + constraint relaxation · C++17 core with unit tests · raw WebGL2 + GLSL weave shader.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23f5f2ea'/%3E%3Cpath d='M4 8 Q10 5 16 8 T28 8 L28 24 Q22 27 16 24 T4 24 Z' fill='none' stroke='%233b559e' stroke-width='2'/%3E%3Cpath d='M4 14 Q10 11 16 14 T28 14 M4 19 Q10 16 16 19 T28 19' stroke='%233b559e' stroke-width='1' fill='none' opacity='0.55'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --paper:   #f5f2ea;
+    --surface: #fdfcf7;
+    --ink:     #24211a;
+    --dim:     #6d675a;
+    --faint:   #97907f;
+    --line:    #e2dccd;
+    --grid:    rgba(59, 85, 158, 0.07);
+    --indigo:  #3b559e;
+    --indigo-deep: #2c4076;
+    --madder:  #b0502f;
+    --code-bg: #23262e;
+    --code-ink:#dfe3ee;
+    --measure: 1060px;
+  }
+
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  body {
+    background:
+      repeating-linear-gradient(0deg,  var(--grid) 0 1px, transparent 1px 28px),
+      repeating-linear-gradient(90deg, var(--grid) 0 1px, transparent 1px 28px),
+      var(--paper);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans KR', system-ui, -apple-system, sans-serif;
+    font-size: 16px;
+    line-height: 1.68;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  body.lang-ko .en { display: none; }
+  body.lang-en .ko { display: none; }
+
+  ::selection { background: rgba(59,85,158,0.18); }
+  :focus-visible { outline: 2px solid var(--indigo); outline-offset: 3px; border-radius: 2px; }
+
+  /* ── Nav ── */
+  .nav {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 13px clamp(18px, 4vw, 40px);
+    background: rgba(245, 242, 234, 0.85);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px dashed transparent;
+    transition: border-color 0.3s;
+  }
+  .nav.scrolled { border-bottom-color: var(--line); }
+  .nav .brand {
+    font-family: 'IBM Plex Mono', monospace; font-size: 12.5px;
+    color: var(--dim); text-decoration: none; display: flex; align-items: center; gap: 9px;
+  }
+  .nav .brand b { color: var(--ink); font-weight: 500; }
+  .nav .brand .swatch {
+    width: 14px; height: 14px; border-radius: 3px;
+    background:
+      repeating-linear-gradient(0deg,  #3b559e 0 2px, transparent 2px 4px),
+      repeating-linear-gradient(90deg, #3b559e 0 2px, #ece7d9 2px 4px);
+  }
+  .nav-right { display: flex; align-items: center; gap: 9px; }
+  .nav-right a, .nav-right button {
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+    color: var(--dim); text-decoration: none; background: none;
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 11px; cursor: pointer; line-height: 1; transition: all 0.15s;
+  }
+  .nav-right a:hover, .nav-right button:hover { color: var(--indigo); border-color: var(--indigo); }
+  .nav-right .launch {
+    background: var(--indigo); color: #fff; border-color: var(--indigo); font-weight: 500;
+  }
+  .nav-right .launch:hover { background: var(--indigo-deep); color: #fff; }
+
+  /* ── Layout ── */
+  .wrap { max-width: var(--measure); margin-inline: auto; padding-inline: clamp(18px, 4vw, 40px); }
+  .section { padding-block: clamp(52px, 8vh, 96px); }
+  .section + .section { border-top: 1px dashed var(--line); }
+  .prose { max-width: 64ch; }
+  .prose p + p { margin-top: 1em; }
+  .prose b { font-weight: 700; }
+  .lead { font-size: clamp(1.02rem, 1.5vw, 1.16rem); color: var(--dim); }
+  p, li, h1, h2, h3 { word-break: keep-all; }
+
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace; font-size: 0.74rem;
+    letter-spacing: 0.15em; text-transform: uppercase; color: var(--indigo);
+    display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+  }
+  .eyebrow .idx { color: var(--faint); }
+  .eyebrow::before {
+    content: ''; width: 22px; height: 10px;
+    border-left: 2px solid var(--indigo); border-right: 2px solid var(--indigo);
+    background: linear-gradient(var(--indigo), var(--indigo)) center / 100% 2px no-repeat;
+  }
+
+  h1, h2, h3 {
+    font-family: 'Archivo', 'IBM Plex Sans KR', sans-serif;
+    font-weight: 700; line-height: 1.08; letter-spacing: -0.01em; text-wrap: balance;
+  }
+  h2 { font-size: clamp(1.5rem, 3.2vw, 2.2rem); font-stretch: 110%; margin-bottom: 20px; }
+  h3 { font-size: 1.1rem; margin-bottom: 8px; }
+
+  /* ── Hero ── */
+  .hero { position: relative; padding-block: clamp(56px, 10vh, 120px) clamp(44px, 7vh, 88px); overflow: hidden; }
+  #ripple { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; }
+  .hero .wrap { position: relative; z-index: 1; }
+  .hero h1 {
+    font-weight: 800; font-stretch: 114%;
+    font-size: clamp(2.2rem, 5.6vw, 3.9rem); line-height: 1.0;
+    max-width: 16ch; margin-bottom: 20px;
+  }
+  .hero h1 .u { color: var(--indigo); }
+  .hero .lead { max-width: 56ch; margin-bottom: 28px; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 40px; }
+  .btn {
+    font-size: 0.94rem; font-weight: 500; padding: 12px 22px;
+    border-radius: 7px; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--line); color: var(--ink); background: var(--surface);
+    cursor: pointer; transition: all 0.15s;
+  }
+  .btn:hover { border-color: var(--indigo); transform: translateY(-1px); }
+  .btn.primary { background: var(--indigo); border-color: var(--indigo); color: #fff; font-weight: 600; }
+  .btn.primary:hover { background: var(--indigo-deep); }
+  .btn .arrow { transition: transform 0.15s; }
+  .btn:hover .arrow { transform: translateX(3px); }
+
+  .statbar {
+    display: flex; flex-wrap: wrap;
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    background: rgba(253, 252, 247, 0.85); max-width: 780px;
+  }
+  .statbar .stat { flex: 1 1 150px; padding: 14px 18px; border-right: 1px dashed var(--line); }
+  .statbar .stat:last-child { border-right: none; }
+  .statbar .num { font-family: 'IBM Plex Mono', monospace; font-size: 1.12rem; font-variant-numeric: tabular-nums; display: block; margin-bottom: 2px; }
+  .statbar .lbl { font-size: 0.73rem; color: var(--faint); letter-spacing: 0.04em; }
+
+  /* ── Reveal (visible by default; JS opts in) ── */
+  .reveal { transition: opacity 0.65s ease, transform 0.65s ease; }
+  html.reveal-ready .reveal { opacity: 0; transform: translateY(16px); }
+  html.reveal-ready .reveal.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    html.reveal-ready .reveal { opacity: 1; transform: none; transition: none; }
+  }
+
+  /* ── Pattern-piece plate (media frame with cut-line) ── */
+  .plate {
+    background: var(--surface);
+    border: 1px dashed #c9c2ae; border-radius: 10px;
+    padding: 12px; margin-top: 26px; position: relative;
+  }
+  .plate img { display: block; width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line); }
+  .plate .cap {
+    font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; color: var(--faint);
+    padding: 10px 4px 2px; letter-spacing: 0.02em;
+  }
+  .plate .notch {
+    position: absolute; top: -1px; left: 50%; width: 14px; height: 7px;
+    transform: translateX(-50%);
+    background: var(--paper);
+    border: 1px dashed #c9c2ae; border-top: none; border-radius: 0 0 6px 6px;
+  }
+  .media-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .media-2 .plate { margin-top: 26px; }
+  @media (max-width: 720px) { .media-2 { grid-template-columns: 1fr; } }
+
+  /* ── Code ── */
+  pre {
+    background: var(--code-bg); color: var(--code-ink);
+    border-radius: 10px; padding: 18px 20px; margin-top: 22px;
+    font: 12.5px/1.75 'IBM Plex Mono', ui-monospace, monospace;
+    overflow-x: auto; tab-size: 4;
+  }
+  pre .c  { color: #8a93ab; }         /* comment */
+  pre .k  { color: #8fb4ff; }         /* keyword */
+  pre .s  { color: #e8c58b; }         /* string/number */
+  pre .fn { color: #b7e29a; }         /* function */
+  pre .bad  { color: #ff9d87; }
+  pre .good { color: #9fdfae; }
+  code.inline {
+    font: 0.86em 'IBM Plex Mono', monospace;
+    background: rgba(59,85,158,0.08); border-radius: 4px; padding: 1px 6px;
+  }
+
+  /* ── Feature / spring list ── */
+  .flist { list-style: none; margin-top: 22px; }
+  .flist li {
+    display: grid; grid-template-columns: 30px 1fr; gap: 12px;
+    padding: 14px 0; border-top: 1px dashed var(--line); align-items: baseline;
+  }
+  .flist li:last-child { border-bottom: 1px dashed var(--line); }
+  .flist .mk { font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; color: var(--indigo); }
+  .flist .ft { color: var(--dim); }
+  .flist .ft b { color: var(--ink); font-weight: 500; }
+
+  /* ── Bug cards ── */
+  .bugs { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 26px; }
+  @media (max-width: 820px) { .bugs { grid-template-columns: 1fr; } }
+  .bug {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px 22px;
+    min-width: 0; /* grid items default to min-width:auto — the pre inside would otherwise force the column wide */
+  }
+  .media-2 .plate { min-width: 0; }
+  .bug .tag {
+    font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--madder);
+    border: 1px solid rgba(176,80,47,0.35); background: rgba(176,80,47,0.06);
+    border-radius: 16px; padding: 3px 10px; display: inline-block; margin-bottom: 12px;
+  }
+  .bug h3 { font-size: 1.02rem; }
+  .bug p { font-size: 0.92rem; color: var(--dim); margin-top: 8px; }
+  .bug pre { margin-top: 14px; font-size: 11.5px; }
+
+  /* ── Env table ── */
+  table.env { width: 100%; border-collapse: collapse; margin-top: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  table.env th, table.env td { text-align: left; padding: 11px 16px; font-size: 0.9rem; border-bottom: 1px dashed var(--line); }
+  table.env tr:last-child td { border-bottom: none; }
+  table.env th { font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); font-weight: 500; background: rgba(59,85,158,0.04); }
+  table.env td:first-child { color: var(--dim); width: 38%; }
+  table.env td b { font-weight: 500; }
+  table.env .ok { color: var(--indigo); font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem; }
+  .tblwrap { overflow-x: auto; }
+
+  /* ── Note ── */
+  .note {
+    margin-top: 26px; padding: 16px 18px;
+    border-left: 3px solid var(--indigo);
+    background: rgba(59,85,158,0.05); border-radius: 0 8px 8px 0;
+    font-size: 0.93rem; color: var(--dim);
+  }
+  .note b { color: var(--ink); }
+
+  /* ── Roadmap ── */
+  .road { list-style: none; margin-top: 24px; }
+  .road li {
+    display: grid; grid-template-columns: 112px 1fr; gap: 18px;
+    padding: 16px 0; border-top: 1px dashed var(--line); align-items: start;
+  }
+  .road li:last-child { border-bottom: 1px dashed var(--line); }
+  .chip {
+    font-family: 'IBM Plex Mono', monospace; font-size: 0.66rem; letter-spacing: 0.06em;
+    text-transform: uppercase; padding: 4px 9px; border-radius: 16px; border: 1px solid; white-space: nowrap;
+  }
+  .chip.shipped { color: #2e7d4f; border-color: rgba(46,125,79,0.35); background: rgba(46,125,79,0.07); }
+  .chip.planned { color: var(--faint); border-color: var(--line); }
+  .road .rt { color: var(--dim); }
+  .road .rt b { color: var(--ink); font-weight: 500; }
+  @media (max-width: 620px) { .road li { grid-template-columns: 1fr; gap: 8px; } }
+
+  footer { border-top: 1px solid var(--line); padding-block: 40px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 22px; justify-content: space-between; }
+  footer .flinks { display: flex; flex-wrap: wrap; gap: 16px; font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; }
+  footer .flinks a { color: var(--dim); text-decoration: none; }
+  footer .flinks a:hover { color: var(--indigo); }
+  footer .built { font-family: 'IBM Plex Mono', monospace; font-size: 0.73rem; color: var(--faint); max-width: 44ch; line-height: 1.7; }
+</style>
+</head>
+<body class="lang-ko">
+
+<nav class="nav" id="nav">
+  <a class="brand" href="#top"><span class="swatch"></span><span class="ko">이윤호 · <b>Cloth Lab</b></span><span class="en">Yunho Lee · <b>Cloth Lab</b></span></a>
+  <div class="nav-right">
+    <button id="langToggle" aria-label="Switch language">EN</button>
+    <a href="https://github.com/leeyunhome/cloth-simulation" target="_blank" rel="noopener">GitHub</a>
+    <a class="launch" href="demo/"><span class="ko">데모 실행</span><span class="en">Run the demo</span></a>
+  </div>
+</nav>
+
+<!-- ── HERO ── -->
+<header class="hero" id="top">
+  <canvas id="ripple" aria-hidden="true"></canvas>
+  <div class="wrap">
+    <div class="eyebrow"><span class="ko">의상 시뮬레이션 기본기</span><span class="en">Cloth simulation fundamentals</span></div>
+    <h1>
+      <span class="ko">천 한 장을, <span class="u">물리부터 셰이더까지.</span></span>
+      <span class="en">One sheet of cloth — <span class="u">from physics to shader.</span></span>
+    </h1>
+    <p class="lead">
+      <span class="ko">mass-spring 천 시뮬레이션을 처음부터 구현한 기록입니다. position Verlet과 제약 완화 솔버, 단위 테스트 290개로 검증한 C++17 코어, 그리고 라이브러리 없이 raw WebGL2와 직접 쓴 GLSL로 렌더링한 인터랙티브 데모.</span>
+      <span class="en">A mass-spring cloth simulation built from scratch: position Verlet with a constraint-relaxation solver, a C++17 core verified by 290 unit-test assertions, and an interactive demo rendered in raw WebGL2 with hand-written GLSL — no libraries.</span>
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="demo/"><span class="ko">인터랙티브 데모 실행</span><span class="en">Launch the demo</span> <span class="arrow">→</span></a>
+      <a class="btn" href="#act-1"><span class="ko">과정 읽기</span><span class="en">Read the process</span></a>
+    </div>
+    <div class="statbar">
+      <div class="stat"><span class="num">1,395</span><span class="lbl"><span class="ko">파티클</span><span class="en">particles</span></span></div>
+      <div class="stat"><span class="num">7,992</span><span class="lbl"><span class="ko">제약 (스프링)</span><span class="en">constraints</span></span></div>
+      <div class="stat"><span class="num">290</span><span class="lbl"><span class="ko">테스트 어설션 (C++)</span><span class="en">test assertions (C++)</span></span></div>
+      <div class="stat"><span class="num">0</span><span class="lbl"><span class="ko">렌더링 라이브러리</span><span class="en">rendering libraries</span></span></div>
+    </div>
+  </div>
+</header>
+
+<!-- ── WHY ── -->
+<section class="section">
+  <div class="wrap">
+    <div class="prose reveal">
+      <p class="lead">
+        <span class="ko">3D 의상 시뮬레이션 회사의 R&D 공고를 읽고, 그 회사의 핵심 도메인을 직접 구현해 보기로 했습니다. 3D Gaussian Splatting으로 미분가능 렌더링을 바닥부터 짜 본 경험(<a href="https://leeyunhome.github.io/splatting-viewer/" style="color:var(--indigo)">splatting-viewer</a>)이 있으니, 이번엔 시뮬레이션 쪽 기본기를 같은 방식으로 — 강의나 튜토리얼을 따라가는 게 아니라, 물리 모델부터 셰이더까지 한 층씩 직접.</span>
+        <span class="en">I read an R&amp;D posting from a 3D garment-simulation company and decided to build their core domain myself. Having implemented differentiable rendering from the ground up for 3D Gaussian Splatting (<a href="https://leeyunhome.github.io/splatting-viewer/" style="color:var(--indigo)">splatting-viewer</a>), I took the same approach to the simulation side — not following a tutorial, but building each layer from the physics model to the shader.</span>
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ── 01 MODEL ── -->
+<section class="section" id="act-1">
+  <div class="wrap">
+    <div class="eyebrow reveal"><span class="idx">01</span><span class="ko">모델 — 천을 스프링 격자로</span><span class="en">The model — cloth as a spring lattice</span></div>
+    <h2 class="reveal"><span class="ko">파티클 1,395개, 스프링 7,992개</span><span class="en">1,395 particles, 7,992 springs</span></h2>
+    <div class="prose reveal">
+      <p>
+        <span class="ko">천은 45×31 파티클 격자로 표현합니다. 파티클 사이를 세 종류의 거리 제약이 잇습니다 — 종류마다 막는 변형이 다릅니다.</span>
+        <span class="en">The cloth is a 45×31 particle grid. Three kinds of distance constraints connect the particles — each resists a different deformation.</span>
+      </p>
+    </div>
+    <ul class="flist reveal">
+      <li><span class="mk">2,714</span><span class="ft"><b>Structural</b> — <span class="ko">상하좌우 이웃. 천이 늘어나는 것을 막습니다.</span><span class="en">grid neighbors; resists stretching.</span></span></li>
+      <li><span class="mk">2,640</span><span class="ft"><b>Shear</b> — <span class="ko">대각선. 격자가 마름모로 무너지는 전단 변형을 막습니다.</span><span class="en">diagonals; resists the lattice collapsing into rhombi.</span></span></li>
+      <li><span class="mk">2,638</span><span class="ft"><b>Bend</b> — <span class="ko">한 칸 건너 연결. 종이처럼 접히는 것을 막고 천다운 곡률을 만듭니다.</span><span class="en">skip-one links; resists sharp folds and gives cloth-like curvature.</span></span></li>
+    </ul>
+    <div class="note reveal">
+      <span class="ko"><b>정직하게:</b> 이 프로젝트는 해당 공고를 보고 처음 구현해 본 cloth simulation입니다. 기존에 있던 것은 C++ 실무 경험과 3DGS 렌더링 기초였고, 천 물리는 이번에 논문·자료(Jakobsen, GDC 2001)를 읽고 바닥부터 만들었습니다.</span>
+      <span class="en"><b>Honestly:</b> this is my first cloth simulation, built for this application. What I brought in was C++ experience and rendering fundamentals from the 3DGS work; the cloth physics itself I built from scratch after reading the source material (Jakobsen, GDC 2001).</span>
+    </div>
+  </div>
+</section>
+
+<!-- ── 02 SOLVER ── -->
+<section class="section" id="act-2">
+  <div class="wrap">
+    <div class="eyebrow reveal"><span class="idx">02</span><span class="ko">적분기와 솔버</span><span class="en">Integrator &amp; solver</span></div>
+    <h2 class="reveal"><span class="ko">왜 스프링 힘이 아니라 위치 제약인가</span><span class="en">Why position constraints, not spring forces</span></h2>
+    <div class="prose reveal">
+      <p>
+        <span class="ko">처음 떠오르는 방법은 훅 법칙으로 스프링 힘을 계산해 explicit Euler로 적분하는 것입니다. 문제는 천에 필요한 뻣뻣한 스프링일수록 안정 조건(k·dt²)이 가혹해져서, 강성을 올리면 시뮬레이션이 터진다는 것.</span>
+        <span class="en">The obvious approach is Hooke's-law spring forces integrated with explicit Euler. The problem: the stiff springs cloth needs make the stability bound (k·dt²) brutal — turn up the stiffness and the simulation explodes.</span>
+      </p>
+      <p>
+        <span class="ko">그래서 <b>position Verlet + 제약 완화(relaxation)</b>를 택했습니다. 속도를 따로 저장하지 않고 현재/직전 위치에서 암시적으로 얻고, 매 스텝 모든 제약을 여러 번 돌며 두 파티클을 rest length로 끌어당깁니다. 무조건 안정적이고, 강성은 스프링 상수가 아니라 <b>반복 횟수</b>로 조절됩니다 — 데모의 "Solver iter." 슬라이더가 바로 그것입니다.</span>
+        <span class="en">So I used <b>position Verlet + constraint relaxation</b>: velocity lives implicitly in the current/previous positions, and each step repeatedly projects every constraint back toward its rest length. It is unconditionally stable, and stiffness is controlled by the <b>iteration count</b> instead of a spring constant — that's exactly what the "Solver iter." slider in the demo does.</span>
+      </p>
+    </div>
+    <pre class="reveal"><span class="c">// The whole solver — from cpp/include/cloth/cloth.hpp</span>
+<span class="k">for</span> (<span class="k">int</span> it = 0; it &lt; params.iterations; ++it) {
+    <span class="k">for</span> (<span class="k">auto</span>&amp; c : cons_) {
+        <span class="k">if</span> (!c.alive) <span class="k">continue</span>;
+        <span class="k">const</span> Vec3  d   = pos_[c.b] - pos_[c.a];
+        <span class="k">const</span> <span class="k">float</span> len = d.<span class="fn">length</span>();
+        <span class="k">const</span> <span class="k">float</span> wa = invMass_[c.a], wb = invMass_[c.b];   <span class="c">// pinned → 0</span>
+        <span class="k">const</span> Vec3 corr = d * ((len - c.rest) / (len * (wa + wb)));
+        pos_[c.a] += corr * wa;    <span class="c">// both ends move toward rest length,</span>
+        pos_[c.b] -= corr * wb;    <span class="c">// weighted by inverse mass</span>
+    }
+}</pre>
+  </div>
+</section>
+
+<!-- ── 03 BUGS ── -->
+<section class="section" id="act-3">
+  <div class="wrap">
+    <div class="eyebrow reveal"><span class="idx">03</span><span class="ko">테스트가 잡은 것들</span><span class="en">What the tests caught</span></div>
+    <h2 class="reveal"><span class="ko">단위 테스트 7개, 진짜 버그 2개</span><span class="en">Seven unit tests, two real bugs</span></h2>
+    <div class="prose reveal">
+      <p>
+        <span class="ko">C++ 코어에는 Catch2 테스트 7개(어설션 290개)를 붙였습니다 — 격자 토폴로지, 고정점 불변, 자유낙하 ½gt² 궤적 비교, 솔버 수렴, 구 충돌 불변식, 찢어짐, 감쇠 안정성. 형식적인 테스트가 아니라, 실제로 아래 두 버그를 잡아냈습니다.</span>
+        <span class="en">The C++ core ships with 7 Catch2 test cases (290 assertions) — grid topology, pin invariance, free-fall against the analytic ½gt² trajectory, solver convergence, sphere-collision invariants, tearing, damped stability. They are not ceremony: they caught the two bugs below.</span>
+      </p>
+    </div>
+    <div class="bugs reveal">
+      <div class="bug">
+        <span class="tag"><span class="ko">버그 1 — NaN 전파</span><span class="en">Bug 1 — NaN propagation</span></span>
+        <h3><span class="ko">1×N 격자에서 0으로 나누기</span><span class="en">Division by zero on 1×N grids</span></h3>
+        <p><span class="ko">자유낙하 테스트가 2×1 격자를 만들자 모든 좌표가 NaN이 됐습니다. 원인: <code class="inline">height/(rows-1)</code>이 rows=1에서 inf가 되고, <code class="inline">0×inf = NaN</code>이 전체로 전파. 퇴화 격자를 가드해서 해결.</span>
+        <span class="en">The free-fall test built a 2×1 grid and every coordinate went NaN. Cause: <code class="inline">height/(rows-1)</code> becomes inf at rows=1, and <code class="inline">0×inf = NaN</code> propagates everywhere. Fixed by guarding degenerate grids.</span></p>
+        <pre><span class="bad">- dy = height / (rows - 1);</span>
+<span class="good">+ dy = rows &gt; 1 ? height / (rows - 1) : 0.f;</span></pre>
+      </div>
+      <div class="bug">
+        <span class="tag"><span class="ko">버그 2 — 순서 의존성</span><span class="en">Bug 2 — ordering dependence</span></span>
+        <h3><span class="ko">찢어짐 판정을 가리는 Gauss–Seidel</span><span class="en">Gauss–Seidel hiding the tear check</span></h3>
+        <p><span class="ko">찢어짐 테스트가 실패했습니다. 완화 루프 안에서 찢어짐을 검사했는데, 찢어짐 면제인 bend 제약이 <b>먼저</b> 처리되며 길이를 복원해 버려 structural 제약이 과신장을 못 보는 것. 판정을 완화 이전의 별도 패스로 분리해 해결 — 순서에 의존하지 않게.</span>
+        <span class="en">The tearing test failed. The check ran inside the relaxation loop, and a tear-exempt bend constraint that happened to run <b>first</b> restored the length before the structural spring ever saw the overstretch. Fixed by moving tearing into its own pre-relaxation pass — order-independent.</span></p>
+        <pre><span class="bad">- if (len &gt; rest * factor) tear();  <span class="c">// inside relax loop</span></span>
+<span class="good">+ tearOverstretched();  <span class="c">// separate pass, pre-solve state</span></span>
+<span class="good">+ relax(iterations);</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 04 RENDERING ── -->
+<section class="section" id="act-4">
+  <div class="wrap">
+    <div class="eyebrow reveal"><span class="idx">04</span><span class="ko">렌더링 — raw WebGL2</span><span class="en">Rendering — raw WebGL2</span></div>
+    <h2 class="reveal"><span class="ko">셰이더로 짠 직조 패턴</span><span class="en">A weave, woven in the shader</span></h2>
+    <div class="prose reveal">
+      <p>
+        <span class="ko">데모 렌더러는 라이브러리 없이 WebGL2로 직접 작성했습니다 — 행렬 수학, 버퍼 관리, 셰이더까지. 매 프레임 정점 법선을 재계산하고, <code class="inline">gl_FrontFacing</code>으로 양면을 다르게 셰이딩합니다(천 뒷면은 살짝 어둡고 따뜻하게). 천 표면의 직조 무늬는 텍스처가 아니라 프래그먼트 셰이더의 절차적 패턴입니다: 날실(warp)과 씨실(weft)이 셀마다 위아래를 교차하는 평직(plain weave)을 UV 공간에서 계산합니다.</span>
+        <span class="en">The demo renderer is hand-written WebGL2 — matrix math, buffer management, and shaders, no libraries. Vertex normals are recomputed every frame, and <code class="inline">gl_FrontFacing</code> shades the two sides differently (the back of the cloth is slightly darker and warmer). The fabric pattern is not a texture: it's a procedural plain weave in the fragment shader, with warp and weft threads alternating over/under per cell in UV space.</span>
+      </p>
+    </div>
+    <pre class="reveal"><span class="c">// fragment shader — procedural plain weave (GLSL 300 es)</span>
+<span class="k">vec2</span>  t    = vUV * <span class="k">vec2</span>(<span class="s">96.0</span>, <span class="s">66.0</span>);          <span class="c">// thread frequency</span>
+<span class="k">vec2</span>  g    = <span class="fn">fract</span>(t) - <span class="s">0.5</span>;
+<span class="k">float</span> warp = <span class="s">1.0</span> - <span class="fn">smoothstep</span>(<span class="s">0.30</span>, <span class="s">0.50</span>, <span class="fn">abs</span>(g.x));  <span class="c">// vertical thread</span>
+<span class="k">float</span> weft = <span class="s">1.0</span> - <span class="fn">smoothstep</span>(<span class="s">0.30</span>, <span class="s">0.50</span>, <span class="fn">abs</span>(g.y));  <span class="c">// horizontal thread</span>
+<span class="k">bool</span> warpTop = <span class="fn">mod</span>(cell.x + cell.y, <span class="s">2.0</span>) &lt; <span class="s">1.0</span>;       <span class="c">// over/under alternation</span>
+<span class="c">// indigo-dyed warp × undyed weft, shadow in the gaps between threads</span></pre>
+    <div class="media-2">
+      <div class="plate reveal"><span class="notch"></span>
+        <img src="assets/demo_default.jpg" alt="Cloth demo — woven cloth billowing over a sphere" loading="lazy">
+        <div class="cap"><span class="ko">직조 셰이더 + 바람 — 구 위에서 나부끼는 천</span><span class="en">Weave shader + wind, billowing over the sphere</span></div>
+      </div>
+      <div class="plate reveal"><span class="notch"></span>
+        <img src="assets/demo_wire.jpg" alt="Wireframe view showing structural and shear constraints" loading="lazy">
+        <div class="cap"><span class="ko">와이어프레임 — structural·shear 제약이 그대로 보임</span><span class="en">Wireframe — the structural &amp; shear lattice, visible</span></div>
+      </div>
+    </div>
+    <div class="plate reveal"><span class="notch"></span>
+      <img src="assets/demo_tear.jpg" alt="Cloth torn by dragging, leaving a hole" loading="lazy">
+      <div class="cap"><span class="ko">마우스로 잡아 찢은 천 — 제약이 끊기면 해당 삼각형이 메시에서 제거됨</span><span class="en">Torn by dragging — when a constraint breaks, its triangles leave the mesh</span></div>
+    </div>
+    <div class="prose reveal" style="margin-top:26px;">
+      <p>
+        <span class="ko">상호작용도 직접 구현했습니다: 마우스 픽킹은 파티클을 화면 공간에 투영해 가장 가까운 것을 잡고, 드래그는 카메라 기저 벡터로 만든 레이를 파티클 깊이의 평면과 교차시켜 움직입니다. 바람은 삼각형 법선에 비례하는 공기역학적 힘(n·w)으로, 천이 통째로 밀리는 게 아니라 <b>부풀게</b> 만듭니다.</span>
+        <span class="en">Interaction is hand-rolled too: picking projects every particle to screen space and grabs the nearest; dragging intersects a camera-basis ray with a plane at the particle's depth. Wind is an aerodynamic per-triangle force (n·w along the normal) — which is why the cloth <b>billows</b> instead of translating.</span>
+      </p>
+    </div>
+    <div class="cta reveal" style="margin-top:26px; margin-bottom:0;">
+      <a class="btn primary" href="demo/"><span class="ko">직접 잡아당기고 찢어보기</span><span class="en">Grab it, tear it yourself</span> <span class="arrow">→</span></a>
+    </div>
+  </div>
+</section>
+
+<!-- ── 05 C++ CORE ── -->
+<section class="section" id="act-5">
+  <div class="wrap">
+    <div class="eyebrow reveal"><span class="idx">05</span><span class="ko">C++17 코어</span><span class="en">The C++17 core</span></div>
+    <h2 class="reveal"><span class="ko">데모는 포팅이고, 원본은 C++입니다</span><span class="en">The demo is a port; the reference is C++</span></h2>
+    <div class="prose reveal">
+      <p>
+        <span class="ko">물리는 먼저 C++17 헤더 라이브러리로 구현해 테스트로 검증한 뒤, 검증된 로직을 그대로 JavaScript로 포팅했습니다. 저장소 구성은 실무 그래픽스 팀의 개발 환경을 그대로 따랐습니다:</span>
+        <span class="en">The physics was implemented and test-verified in a C++17 header library first, then ported line-for-line to JavaScript. The repository mirrors a production graphics team's environment:</span>
+      </p>
+    </div>
+    <div class="tblwrap reveal">
+      <table class="env">
+        <tr><th><span class="ko">항목</span><span class="en">Item</span></th><th><span class="ko">이 저장소</span><span class="en">This repo</span></th></tr>
+        <tr><td><span class="ko">언어</span><span class="en">Language</span></td><td><b>C++17</b> <span class="ok">(header-only core, 의존성 0)</span></td></tr>
+        <tr><td><span class="ko">빌드</span><span class="en">Build</span></td><td><b>CMake</b> <span class="ok">(Ninja 호환)</span></td></tr>
+        <tr><td><span class="ko">테스트</span><span class="en">Tests</span></td><td><b>Catch2</b> — 7 cases · 290 assertions</td></tr>
+        <tr><td>CI</td><td><b>GitHub Actions</b> — Ubuntu · Windows · macOS 매트릭스</td></tr>
+        <tr><td><span class="ko">헤드리스 실행</span><span class="en">Headless run</span></td><td><code class="inline">cloth_headless</code> — <span class="ko">720스텝 안정성 리포트, 불안정 시 exit 1 (CI 스모크 체크)</span><span class="en">720-step stability report; exits 1 if unstable (CI smoke check)</span></td></tr>
+      </table>
+    </div>
+    <pre class="reveal"><span class="c">$ ./cloth_headless        # 45×31, wind + sphere, dt = 1/120</span>
+cloth 45x31  particles=1395  constraints=7992  dt=1/120
+  step     maxStretch    meanSpeed       minY
+   120          14.0%      0.26108     -1.026
+   360          11.2%      0.37077     -1.031
+   720           5.9%      0.05797     -0.620
+
+result: STABLE (max stretch 5.9% &lt; 25% budget)</pre>
+  </div>
+</section>
+
+<!-- ── 06 ROADMAP ── -->
+<section class="section" id="roadmap">
+  <div class="wrap">
+    <div class="eyebrow reveal"><span class="idx">06</span><span class="ko">다음 단계</span><span class="en">What's next</span></div>
+    <h2 class="reveal"><span class="ko">로드맵</span><span class="en">Roadmap</span></h2>
+    <ul class="road reveal">
+      <li>
+        <span><span class="chip shipped"><span class="ko">완료</span><span class="en">shipped</span></span></span>
+        <span class="rt"><b><span class="ko">코어 + 데모</span><span class="en">Core + demo</span></b> — <span class="ko">Verlet·제약 완화·바람·구/바닥 충돌·찢어짐·그랩, C++ 테스트 290 어설션, raw WebGL2 렌더러.</span><span class="en">Verlet, relaxation, wind, sphere/floor collision, tearing, grabbing; 290 C++ test assertions; raw WebGL2 renderer.</span></span>
+      </li>
+      <li>
+        <span><span class="chip planned"><span class="ko">예정</span><span class="en">planned</span></span></span>
+        <span class="rt"><b><span class="ko">자기충돌</span><span class="en">Self-collision</span></b> — <span class="ko">공간 해시로 파티클-파티클 충돌. 지금은 천이 자기 자신을 통과합니다.</span><span class="en">particle–particle collision via spatial hashing; right now the cloth passes through itself.</span></span>
+      </li>
+      <li>
+        <span><span class="chip planned"><span class="ko">예정</span><span class="en">planned</span></span></span>
+        <span class="rt"><b><span class="ko">GPU 솔버</span><span class="en">GPU solver</span></b> — <span class="ko">제약 그래프 컬러링 후 WebGPU compute(또는 CUDA)로 병렬 완화. 반복 횟수를 수십 배 올릴 수 있습니다.</span><span class="en">graph-color the constraints, then parallel relaxation in WebGPU compute (or CUDA) — enables an order of magnitude more iterations.</span></span>
+      </li>
+      <li>
+        <span><span class="chip planned"><span class="ko">예정</span><span class="en">planned</span></span></span>
+        <span class="rt"><b>XPBD</b> — <span class="ko">반복 횟수와 무관한 물리적 강성 파라미터. 현재 방식의 알려진 한계(강성이 반복 횟수·타임스텝에 묶임)를 푸는 표준 확장.</span><span class="en">physically meaningful stiffness independent of iteration count — the standard fix for relaxation's known limitation.</span></span>
+      </li>
+      <li>
+        <span><span class="chip planned"><span class="ko">예정</span><span class="en">planned</span></span></span>
+        <span class="rt"><b><span class="ko">Qt 데스크톱 포트</span><span class="en">Qt desktop port</span></b> — <span class="ko">C++ 코어는 이미 렌더러와 분리되어 있어, Qt+OpenGL 위젯에 얹는 것이 자연스러운 다음 단계입니다. (Qt는 현재 학습 중입니다.)</span><span class="en">the C++ core is already renderer-agnostic; hosting it in a Qt + OpenGL widget is the natural next step. (Qt is something I'm currently learning.)</span></span>
+      </li>
+      <li>
+        <span><span class="chip planned"><span class="ko">예정</span><span class="en">planned</span></span></span>
+        <span class="rt"><b><span class="ko">2D 패턴 → 3D 드레이프</span><span class="en">2D pattern → 3D drape</span></b> — <span class="ko">평면 패턴 조각을 재봉선으로 이어 입체로 드레이프하는 것 — 의상 시뮬레이션의 실제 파이프라인로 가는 길.</span><span class="en">flat pattern pieces seamed together and draped in 3D — the road toward how garment simulation actually works.</span></span>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <div style="font-family:'Archivo',sans-serif;font-weight:700;font-size:1.02rem;"><span class="ko">이윤호</span><span class="en">Yunho Lee</span></div>
+      <p class="built" style="margin-top:6px;">
+        <span class="ko">임베디드 리눅스 · Edge AI 엔지니어. 시뮬레이션과 렌더링을 바닥부터 공부합니다.</span>
+        <span class="en">Embedded Linux · Edge AI engineer, studying simulation &amp; rendering from the ground up.</span>
+      </p>
+    </div>
+    <div class="flinks">
+      <a href="https://leeyunhome.github.io/" target="_blank" rel="noopener">← <span class="ko">프로젝트 허브</span><span class="en">Project hub</span></a>
+      <a href="https://leeyunhome.github.io/splatting-viewer/" target="_blank" rel="noopener">3DGS</a>
+      <a href="https://github.com/leeyunhome/cloth-simulation" target="_blank" rel="noopener">GitHub</a>
+      <a href="demo/"><span class="ko">데모</span><span class="en">Demo</span></a>
+    </div>
+    <p class="built">
+      <span class="ko">참고: Jakobsen, "Advanced Character Physics" (GDC 2001) · Provot (1995). 코드 전체는 직접 작성.</span>
+      <span class="en">References: Jakobsen, "Advanced Character Physics" (GDC 2001) · Provot (1995). All code written from scratch.</span>
+    </p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  /* Language toggle */
+  var body = document.body;
+  var langBtn = document.getElementById('langToggle');
+  var saved = null;
+  try { saved = localStorage.getItem('cloth-lab-lang'); } catch (e) {}
+  function setLang(lang) {
+    body.classList.remove('lang-ko', 'lang-en');
+    body.classList.add('lang-' + lang);
+    document.documentElement.lang = lang;
+    langBtn.textContent = (lang === 'ko') ? 'EN' : '한국어';
+    try { localStorage.setItem('cloth-lab-lang', lang); } catch (e) {}
+  }
+  setLang(saved === 'en' ? 'en' : 'ko');
+  langBtn.addEventListener('click', function () {
+    setLang(body.classList.contains('lang-ko') ? 'en' : 'ko');
+  });
+
+  /* Nav border on scroll */
+  var nav = document.getElementById('nav');
+  function onScroll() { nav.classList.toggle('scrolled', window.scrollY > 8); }
+  onScroll();
+  window.addEventListener('scroll', onScroll, { passive: true });
+
+  /* Scroll reveal — content is visible without JS; animation is opt-in */
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!reduce && 'IntersectionObserver' in window) {
+    document.documentElement.classList.add('reveal-ready');
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); }
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    document.querySelectorAll('.reveal').forEach(function (el) { io.observe(el); });
+  }
+
+  /* Hero: drafting-paper grid rippling like cloth (2D canvas, cheap) */
+  var canvas = document.getElementById('ripple');
+  if (canvas && canvas.getContext) {
+    var ctx = canvas.getContext('2d');
+    var W = 0, H = 0, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    function resize() {
+      var r = canvas.getBoundingClientRect();
+      W = r.width; H = r.height;
+      canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    var CELL = 34;
+    function draw(t) {
+      ctx.clearRect(0, 0, W, H);
+      ctx.strokeStyle = 'rgba(59, 85, 158, 0.16)';
+      ctx.lineWidth = 1;
+      var nx = Math.ceil(W / CELL) + 2, ny = Math.ceil(H / CELL) + 2;
+      var amp = 7;
+      function py(x, y) {
+        return y + Math.sin(x * 0.012 + t * 0.9) * amp * Math.sin(y * 0.008 + t * 0.6)
+                 + Math.sin((x + y) * 0.006 + t * 0.5) * amp * 0.6;
+      }
+      for (var j = 0; j < ny; j++) {
+        ctx.beginPath();
+        for (var i = 0; i <= nx; i++) {
+          var x = i * CELL, y = j * CELL;
+          var yy = py(x, y);
+          if (i === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy);
+        }
+        ctx.stroke();
+      }
+      for (var i2 = 0; i2 < nx; i2++) {
+        ctx.beginPath();
+        for (var j2 = 0; j2 <= ny; j2++) {
+          var x2 = i2 * CELL, y2 = j2 * CELL;
+          var yy2 = py(x2, y2);
+          if (j2 === 0) ctx.moveTo(x2, yy2); else ctx.lineTo(x2, yy2);
+        }
+        ctx.stroke();
+      }
+    }
+    if (reduce) {
+      draw(1.2);
+    } else {
+      var running = true, raf = null;
+      function loop(ms) { if (!running) return; draw(ms / 1000); raf = requestAnimationFrame(loop); }
+      raf = requestAnimationFrame(loop);
+      document.addEventListener('visibilitychange', function () {
+        running = !document.hidden;
+        if (running) raf = requestAnimationFrame(loop);
+        else if (raf) { cancelAnimationFrame(raf); raf = null; }
+      });
+    }
+  }
+})();
+</script>
+</body>
+</html>

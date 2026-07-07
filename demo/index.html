@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloth Lab — Interactive Demo</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: #101318;
+    font-family: 'IBM Plex Sans KR', 'Segoe UI', 'Apple SD Gothic Neo', sans-serif;
+    color: #e8eaf2;
+  }
+  canvas#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+  .panel {
+    position: fixed; z-index: 10;
+    background: rgba(13, 16, 22, 0.84);
+    border: 1px solid #262c3a;
+    border-radius: 10px;
+    backdrop-filter: blur(8px);
+    padding: 14px 16px;
+  }
+  #info { top: 12px; left: 12px; max-width: 340px; }
+  #info h1 { font-size: 15px; font-weight: 600; margin-bottom: 5px; }
+  #info p  { font-size: 12.5px; color: #98a0b8; line-height: 1.55; }
+  #info .keys { margin-top: 9px; font-size: 11.5px; color: #6b7390; line-height: 1.7; }
+  #info .keys b { color: #98a0b8; font-weight: 500; }
+
+  #hud {
+    left: 12px; bottom: 46px;
+    font: 11.5px/1.6 'IBM Plex Mono', ui-monospace, monospace;
+    color: #98a0b8; padding: 9px 13px;
+  }
+  #hud b { color: #e8eaf2; font-weight: 500; }
+
+  #controls { top: 12px; right: 12px; width: 232px; }
+  #controls h2 {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.09em;
+    text-transform: uppercase; color: #6b7390; margin: 12px 0 7px;
+  }
+  #controls h2:first-child { margin-top: 0; }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .row label { font-size: 12px; color: #98a0b8; flex: 0 0 62px; }
+  .row output { font: 11px 'IBM Plex Mono', monospace; color: #e8eaf2; flex: 0 0 30px; text-align: right; }
+  input[type=range] { flex: 1; accent-color: #5b78d6; height: 3px; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  button {
+    font-family: inherit; font-size: 12px; padding: 6px 10px;
+    background: #1a2030; color: #c3c9dd;
+    border: 1px solid #2c3550; border-radius: 6px; cursor: pointer;
+    transition: all 0.14s;
+  }
+  button:hover { border-color: #5b78d6; color: #fff; }
+  button.on { background: #34457e; border-color: #5b78d6; color: #fff; }
+  button.primary { background: #5b78d6; border-color: #5b78d6; color: #fff; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.1); }
+
+  a.back {
+    position: fixed; bottom: 12px; left: 12px; z-index: 10;
+    color: #98a0b8; background: rgba(13,16,22,0.84);
+    border: 1px solid #262c3a; border-radius: 6px; padding: 7px 13px;
+    font: 500 12px/1 'IBM Plex Mono', monospace;
+    text-decoration: none; backdrop-filter: blur(8px);
+  }
+  a.back:hover { color: #8fa5e8; border-color: #5b78d6; }
+
+  #err {
+    position: fixed; inset: 0; display: none; place-items: center;
+    background: #101318; z-index: 100; padding: 24px; text-align: center;
+    font-size: 14px; color: #e8eaf2; line-height: 1.8;
+  }
+  @media (max-width: 760px) {
+    #info { display: none; }
+    #controls { width: 200px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="err"></div>
+
+<div class="panel" id="info">
+  <h1>Cloth Lab — mass-spring simulation</h1>
+  <p>Position Verlet + constraint relaxation, rendered with raw WebGL2 and a procedural weave shader. The same core, in C++17 with unit tests, lives in the repo.</p>
+  <div class="keys">
+    <b>Drag cloth</b> grab &amp; pull (tears if tearing is on)<br>
+    <b>Drag space</b> orbit camera &nbsp;·&nbsp; <b>Wheel</b> zoom
+  </div>
+</div>
+
+<div class="panel" id="controls">
+  <h2>Simulation</h2>
+  <div class="row"><label>Wind</label><input type="range" id="wind" min="0" max="2.5" step="0.05" value="1.0"><output id="windV">1.0</output></div>
+  <div class="row"><label>Solver iter.</label><input type="range" id="iters" min="1" max="10" step="1" value="4"><output id="itersV">4</output></div>
+  <div class="btns">
+    <button id="tear">Tearing: off</button>
+    <button id="wire">Wireframe</button>
+  </div>
+
+  <h2>Pins</h2>
+  <div class="btns">
+    <button id="pinRow" class="on">Top row</button>
+    <button id="pin5">5 points</button>
+    <button id="pin2">Corners</button>
+    <button id="pin0">Release</button>
+  </div>
+
+  <h2>Sphere</h2>
+  <div class="btns" style="margin-bottom:7px;">
+    <button id="sphAuto" class="on">Auto sweep</button>
+  </div>
+  <div class="row"><label>Position</label><input type="range" id="sphX" min="-0.9" max="0.9" step="0.01" value="0" disabled><output id="sphXV">0.0</output></div>
+
+  <h2>&nbsp;</h2>
+  <div class="btns"><button id="reset" class="primary">Reset cloth</button></div>
+</div>
+
+<div class="panel" id="hud">particles <b id="hP">–</b> · constraints <b id="hC">–</b> · tris <b id="hT">–</b> · <b id="hF">–</b> fps</div>
+<a class="back" href="../">&larr; Project overview</a>
+
+<script>
+(function () {
+"use strict";
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Cloth core — a direct JavaScript port of cpp/include/cloth/cloth.hpp.
+   The C++ version is the reference; its unit tests (290 assertions) pin down
+   the behaviour ported here: Verlet integration, Gauss–Seidel constraint
+   relaxation, pre-solve tearing pass, sphere projection.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const COLS = 45, ROWS = 31;
+const W = 1.8, H = 1.2;
+const N = COLS * ROWS;
+const DT = 1 / 120;                 // fixed physics substep
+const T_STRUCT = 0, T_SHEAR = 1, T_BEND = 2;
+
+const pos  = new Float32Array(N * 3);
+const prev = new Float32Array(N * 3);
+const acc  = new Float32Array(N * 3);
+const invM = new Float32Array(N);
+
+let conA, conB, conRest, conType, conAlive, conCount;
+const params = { gx: 0, gy: -3.2, gz: 0, damping: 0.985, iterations: 4, tearFactor: 0 };
+
+const idx = (x, y) => y * COLS + x;
+
+function buildConstraints() {
+  const A = [], B = [], R = [], T = [];
+  const rest = (i, j) => {
+    const dx = pos[j*3] - pos[i*3], dy = pos[j*3+1] - pos[i*3+1], dz = pos[j*3+2] - pos[i*3+2];
+    return Math.hypot(dx, dy, dz);
+  };
+  const link = (i, j, t) => { A.push(i); B.push(j); R.push(rest(i, j)); T.push(t); };
+  for (let y = 0; y < ROWS; y++)
+    for (let x = 0; x < COLS; x++) {
+      if (x + 1 < COLS) link(idx(x, y), idx(x + 1, y), T_STRUCT);
+      if (y + 1 < ROWS) link(idx(x, y), idx(x, y + 1), T_STRUCT);
+      if (x + 1 < COLS && y + 1 < ROWS) {
+        link(idx(x, y),     idx(x + 1, y + 1), T_SHEAR);
+        link(idx(x + 1, y), idx(x,     y + 1), T_SHEAR);
+      }
+      if (x + 2 < COLS) link(idx(x, y), idx(x + 2, y), T_BEND);
+      if (y + 2 < ROWS) link(idx(x, y), idx(x, y + 2), T_BEND);
+    }
+  conCount = A.length;
+  conA = Int32Array.from(A); conB = Int32Array.from(B);
+  conRest = Float32Array.from(R); conType = Uint8Array.from(T);
+  conAlive = new Uint8Array(conCount).fill(1);
+}
+
+function resetCloth() {
+  const dx = W / (COLS - 1), dy = H / (ROWS - 1);
+  for (let y = 0; y < ROWS; y++)
+    for (let x = 0; x < COLS; x++) {
+      const i = idx(x, y) * 3;
+      pos[i] = x * dx - W / 2; pos[i+1] = 0.62 - y * dy; pos[i+2] = 0;
+    }
+  prev.set(pos);
+  acc.fill(0);
+  invM.fill(1);
+  if (conAlive) conAlive.fill(1); else buildConstraints();
+  conAlive.fill(1);
+  applyPinMode(pinMode);
+  rebuildIndices();
+}
+
+/* Pin modes: which top-row particles are fixed */
+let pinMode = 'row';
+function applyPinMode(mode) {
+  pinMode = mode;
+  invM.fill(1);
+  const pin = (x) => { const i = idx(x, 0); invM[i] = 0; prev[i*3]=pos[i*3]; prev[i*3+1]=pos[i*3+1]; prev[i*3+2]=pos[i*3+2]; };
+  if (mode === 'row')  for (let x = 0; x < COLS; x++) pin(x);
+  if (mode === 'five') [0, 11, 22, 33, COLS - 1].forEach(pin);
+  if (mode === 'two')  [0, COLS - 1].forEach(pin);
+  // 'none' → nothing pinned
+}
+
+/* Aerodynamic wind: per-triangle normal force, spread to vertices */
+function applyWind(wx, wy, wz) {
+  for (let t = 0; t < triCount; t++) {
+    if (!triAlive[t]) continue;
+    const a = tris[t*3]*3, b = tris[t*3+1]*3, c = tris[t*3+2]*3;
+    const e1x = pos[b]-pos[a],   e1y = pos[b+1]-pos[a+1], e1z = pos[b+2]-pos[a+2];
+    const e2x = pos[c]-pos[a],   e2y = pos[c+1]-pos[a+1], e2z = pos[c+2]-pos[a+2];
+    let nx = e1y*e2z - e1z*e2y, ny = e1z*e2x - e1x*e2z, nz = e1x*e2y - e1y*e2x;
+    const len = Math.hypot(nx, ny, nz);
+    if (len < 1e-8) continue;
+    nx /= len; ny /= len; nz /= len;
+    const f = nx*wx + ny*wy + nz*wz;
+    const fx = nx*f, fy = ny*f, fz = nz*f;
+    acc[a] += fx; acc[a+1] += fy; acc[a+2] += fz;
+    acc[b] += fx; acc[b+1] += fy; acc[b+2] += fz;
+    acc[c] += fx; acc[c+1] += fy; acc[c+2] += fz;
+  }
+}
+
+/* Tearing decided on the pre-relaxation state, in its own pass — checking
+   inside the relaxation loop is order-dependent (a bend constraint that runs
+   first can hide the overstretch). Same fix as the C++ core. */
+let tornDirty = false;
+function tearPass() {
+  if (params.tearFactor <= 0) return;
+  for (let c = 0; c < conCount; c++) {
+    if (!conAlive[c] || conType[c] === T_BEND) continue;
+    const a = conA[c]*3, b = conB[c]*3;
+    const len = Math.hypot(pos[b]-pos[a], pos[b+1]-pos[a+1], pos[b+2]-pos[a+2]);
+    if (len > conRest[c] * params.tearFactor) { conAlive[c] = 0; tornDirty = true; }
+  }
+}
+
+function step() {
+  const d2 = DT * DT, damp = params.damping;
+  for (let i = 0; i < N; i++) {
+    const j = i * 3;
+    if (invM[i] === 0) { acc[j]=acc[j+1]=acc[j+2]=0; continue; }
+    const nx = pos[j]   + (pos[j]  -prev[j])  *damp + (params.gx + acc[j])  *d2;
+    const ny = pos[j+1] + (pos[j+1]-prev[j+1])*damp + (params.gy + acc[j+1])*d2;
+    const nz = pos[j+2] + (pos[j+2]-prev[j+2])*damp + (params.gz + acc[j+2])*d2;
+    prev[j]=pos[j]; prev[j+1]=pos[j+1]; prev[j+2]=pos[j+2];
+    pos[j]=nx; pos[j+1]=ny; pos[j+2]=nz;
+    acc[j]=acc[j+1]=acc[j+2]=0;
+  }
+  tearPass();
+  for (let it = 0; it < params.iterations; it++) {
+    for (let c = 0; c < conCount; c++) {
+      if (!conAlive[c]) continue;
+      const ia = conA[c], ib = conB[c];
+      const wa = invM[ia], wb = invM[ib], wsum = wa + wb;
+      if (wsum === 0) continue;
+      const a = ia*3, b = ib*3;
+      const dx = pos[b]-pos[a], dy = pos[b+1]-pos[a+1], dz = pos[b+2]-pos[a+2];
+      const len = Math.hypot(dx, dy, dz);
+      if (len < 1e-8) continue;
+      const s = (len - conRest[c]) / (len * wsum);
+      pos[a]   += dx*s*wa; pos[a+1] += dy*s*wa; pos[a+2] += dz*s*wa;
+      pos[b]   -= dx*s*wb; pos[b+1] -= dy*s*wb; pos[b+2] -= dz*s*wb;
+    }
+  }
+}
+
+function collideSphere(cx, cy, cz, r) {
+  const rr = r + 0.012;
+  for (let i = 0; i < N; i++) {
+    if (invM[i] === 0) continue;
+    const j = i*3;
+    const dx = pos[j]-cx, dy = pos[j+1]-cy, dz = pos[j+2]-cz;
+    const d = Math.hypot(dx, dy, dz);
+    if (d < rr && d > 1e-8) {
+      const s = rr / d;
+      pos[j] = cx + dx*s; pos[j+1] = cy + dy*s; pos[j+2] = cz + dz*s;
+    }
+  }
+}
+
+/* Floor plane: clamp + tangential friction (drag prev toward pos so the
+   cloth drapes and settles instead of sliding forever). */
+const FLOOR_Y = -1.06;
+function collideFloor() {
+  for (let i = 0; i < N; i++) {
+    if (invM[i] === 0) continue;
+    const j = i*3;
+    if (pos[j+1] < FLOOR_Y) {
+      pos[j+1] = FLOOR_Y;
+      prev[j]   += (pos[j]   - prev[j])   * 0.35; // friction on x/z
+      prev[j+2] += (pos[j+2] - prev[j+2]) * 0.35;
+    }
+  }
+}
+
+/* ── Triangles (rendering + wind + tearing coupling) ──────────────────────
+   A triangle dies when any of its three edge constraints is torn. */
+let tris, triAlive, triCount, triEdge; // triEdge: 3 constraint indices per tri
+function buildTris() {
+  const edgeMap = new Map();
+  for (let c = 0; c < conCount; c++) {
+    if (conType[c] === T_BEND) continue;
+    const a = Math.min(conA[c], conB[c]), b = Math.max(conA[c], conB[c]);
+    edgeMap.set(a * N + b, c);
+  }
+  const T = [], E = [];
+  const edge = (i, j) => edgeMap.get(Math.min(i,j) * N + Math.max(i,j));
+  for (let y = 0; y + 1 < ROWS; y++)
+    for (let x = 0; x + 1 < COLS; x++) {
+      const i0 = idx(x,y), i1 = idx(x+1,y), i2 = idx(x,y+1), i3 = idx(x+1,y+1);
+      T.push(i0, i2, i1); E.push(edge(i0,i2), edge(i2,i1), edge(i0,i1));
+      T.push(i1, i2, i3); E.push(edge(i1,i2), edge(i2,i3), edge(i1,i3));
+    }
+  tris = Int32Array.from(T);
+  triEdge = Int32Array.from(E);
+  triCount = T.length / 3;
+  triAlive = new Uint8Array(triCount).fill(1);
+}
+
+let triIndex, edgeIndex, aliveTris, aliveEdges;
+function rebuildIndices() {
+  if (!tris) buildTris();
+  // kill triangles that reference a torn edge
+  for (let t = 0; t < triCount; t++) {
+    triAlive[t] = (conAlive[triEdge[t*3]] && conAlive[triEdge[t*3+1]] && conAlive[triEdge[t*3+2]]) ? 1 : 0;
+  }
+  const ti = [];
+  for (let t = 0; t < triCount; t++)
+    if (triAlive[t]) ti.push(tris[t*3], tris[t*3+1], tris[t*3+2]);
+  triIndex = Uint16Array.from(ti);
+  aliveTris = ti.length / 3;
+
+  const ei = [];
+  for (let c = 0; c < conCount; c++)
+    if (conAlive[c] && conType[c] !== T_BEND) ei.push(conA[c], conB[c]);
+  edgeIndex = Uint16Array.from(ei);
+  aliveEdges = ei.length / 2;
+  indicesDirty = true;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Rendering — raw WebGL2, no libraries.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl2', { antialias: true });
+if (!gl) {
+  const err = document.getElementById('err');
+  err.style.display = 'grid';
+  err.innerHTML = 'This demo needs WebGL2.<br>Please use a recent Chrome, Edge, Firefox or Safari.';
+  throw new Error('no webgl2');
+}
+
+const VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in vec2 aUV;
+uniform mat4 uVP;
+uniform vec3 uOffset;
+uniform float uScale;
+out vec3 vWorld;
+out vec3 vNormal;
+out vec2 vUV;
+void main() {
+  vec3 p = aPos * uScale + uOffset;
+  vWorld = p; vNormal = aNormal; vUV = aUV;
+  gl_Position = uVP * vec4(p, 1.0);
+}`;
+
+const FS = `#version 300 es
+precision highp float;
+in vec3 vWorld;
+in vec3 vNormal;
+in vec2 vUV;
+uniform vec3 uEye;
+uniform vec3 uLight;     // direction TOWARD the light
+uniform int  uMode;      // 0 = weave cloth, 1 = solid, 2 = flat line color
+uniform vec3 uColor;
+out vec4 frag;
+
+/* Procedural plain weave: warp (vertical) and weft (horizontal) threads
+   alternate over/under per cell, like real fabric. */
+vec3 weave(vec2 uv, out float height) {
+  vec2 t = uv * vec2(96.0, 66.0);        // thread frequency (finer than the sim grid)
+  vec2 cell = floor(t);
+  vec2 g = fract(t) - 0.5;
+  float warp = 1.0 - smoothstep(0.30, 0.50, abs(g.x)); // vertical thread mask
+  float weft = 1.0 - smoothstep(0.30, 0.50, abs(g.y)); // horizontal thread mask
+  bool warpTop = mod(cell.x + cell.y, 2.0) < 1.0;
+  vec3 cWarp = vec3(0.28, 0.36, 0.62);   // indigo-dyed warp
+  vec3 cWeft = vec3(0.91, 0.88, 0.80);   // undyed weft
+  // rounded thread profile → soft per-thread shading
+  float hWarp = warp * (0.75 + 0.25 * cos(g.x * 6.283));
+  float hWeft = weft * (0.75 + 0.25 * cos(g.y * 6.283));
+  vec3 col; float h;
+  if (warpTop) { col = warp > 0.02 ? cWarp : cWeft; h = max(hWarp, hWeft * 0.8); }
+  else         { col = weft > 0.02 ? cWeft : cWarp; h = max(hWeft, hWarp * 0.8); }
+  float gap = (1.0 - max(warp, weft));   // shadow in the gaps between threads
+  col *= 1.0 - gap * 0.55;
+  height = h;
+  return col;
+}
+
+void main() {
+  if (uMode == 2) { frag = vec4(uColor, 1.0); return; }
+
+  vec3 n = normalize(vNormal);
+  if (!gl_FrontFacing) n = -n;           // double-sided shading
+
+  vec3 base; float h = 1.0;
+  if (uMode == 0) {
+    base = weave(vUV, h);
+    if (!gl_FrontFacing) base *= vec3(0.78, 0.74, 0.72);  // back face darker/warmer
+  } else {
+    base = uColor;
+  }
+
+  vec3 l = normalize(uLight);
+  vec3 v = normalize(uEye - vWorld);
+  float diff = max(dot(n, l), 0.0) * 0.72 + 0.34;         // wrapped diffuse
+  float spec = pow(max(dot(reflect(-l, n), v), 0.0), 40.0) * (uMode == 0 ? 0.18 * h : 0.35);
+  vec3 col = base * diff + vec3(spec);
+  // cheap fill light from below-left so folds never go pitch black
+  col += base * max(dot(n, normalize(vec3(-0.4, -1.0, 0.3))), 0.0) * 0.10;
+  frag = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);            // gamma
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    throw new Error('shader: ' + gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+  throw new Error('link: ' + gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+const U = {};
+['uVP','uEye','uLight','uMode','uColor','uOffset','uScale'].forEach(n => U[n] = gl.getUniformLocation(prog, n));
+gl.uniform3f(U.uLight, 0.35, 0.8, 0.55);
+gl.uniform3f(U.uOffset, 0, 0, 0);
+gl.uniform1f(U.uScale, 1);
+
+/* cloth buffers */
+const normals = new Float32Array(N * 3);
+const uvs = new Float32Array(N * 2);
+for (let y = 0; y < ROWS; y++)
+  for (let x = 0; x < COLS; x++) {
+    uvs[idx(x,y)*2] = x / (COLS - 1); uvs[idx(x,y)*2+1] = y / (ROWS - 1);
+  }
+
+const vao = gl.createVertexArray();
+gl.bindVertexArray(vao);
+const posBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+gl.bufferData(gl.ARRAY_BUFFER, pos.byteLength, gl.DYNAMIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+const nrmBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
+gl.bufferData(gl.ARRAY_BUFFER, normals.byteLength, gl.DYNAMIC_DRAW);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+const uvBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 0, 0);
+const triBuf = gl.createBuffer();   // ELEMENT buffers bind to the VAO
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, triBuf);
+
+const wireVao = gl.createVertexArray();
+gl.bindVertexArray(wireVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+const edgeBuf = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, edgeBuf);
+gl.bindVertexArray(null);
+
+/* sphere mesh (UV sphere) */
+function makeSphere(seg, ring) {
+  const P = [], Nm = [], I = [];
+  for (let r = 0; r <= ring; r++) {
+    const phi = Math.PI * r / ring;
+    for (let s = 0; s <= seg; s++) {
+      const th = 2 * Math.PI * s / seg;
+      const x = Math.sin(phi) * Math.cos(th), y = Math.cos(phi), z = Math.sin(phi) * Math.sin(th);
+      P.push(x, y, z); Nm.push(x, y, z);
+    }
+  }
+  for (let r = 0; r < ring; r++)
+    for (let s = 0; s < seg; s++) {
+      const a = r * (seg + 1) + s, b = a + seg + 1;
+      I.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  return { P: new Float32Array(P), N: new Float32Array(Nm), I: new Uint16Array(I) };
+}
+/* floor quad (rendered slightly below the collision plane) */
+const floorVao = gl.createVertexArray();
+gl.bindVertexArray(floorVao);
+const FQ = 6.0, FY = -1.075;
+const fp = new Float32Array([-FQ,FY,-FQ,  FQ,FY,-FQ, -FQ,FY,FQ,  FQ,FY,FQ]);
+const fn = new Float32Array([0,1,0, 0,1,0, 0,1,0, 0,1,0]);
+const fb1 = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, fb1);
+gl.bufferData(gl.ARRAY_BUFFER, fp, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+const fb2 = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, fb2);
+gl.bufferData(gl.ARRAY_BUFFER, fn, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+const fbi = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, fbi);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array([0,2,1, 1,2,3]), gl.STATIC_DRAW);
+gl.bindVertexArray(null);
+
+const sph = makeSphere(28, 18);
+const sphVao = gl.createVertexArray();
+gl.bindVertexArray(sphVao);
+const sb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, sb);
+gl.bufferData(gl.ARRAY_BUFFER, sph.P, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+const sn = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, sn);
+gl.bufferData(gl.ARRAY_BUFFER, sph.N, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+const si = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, si);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sph.I, gl.STATIC_DRAW);
+gl.bindVertexArray(null);
+
+/* per-frame vertex normals: accumulate alive-face normals, then normalize */
+function computeNormals() {
+  normals.fill(0);
+  for (let t = 0; t < triCount; t++) {
+    if (!triAlive[t]) continue;
+    const a = tris[t*3]*3, b = tris[t*3+1]*3, c = tris[t*3+2]*3;
+    const e1x = pos[b]-pos[a],   e1y = pos[b+1]-pos[a+1], e1z = pos[b+2]-pos[a+2];
+    const e2x = pos[c]-pos[a],   e2y = pos[c+1]-pos[a+1], e2z = pos[c+2]-pos[a+2];
+    const nx = e1y*e2z - e1z*e2y, ny = e1z*e2x - e1x*e2z, nz = e1x*e2y - e1y*e2x;
+    normals[a]+=nx; normals[a+1]+=ny; normals[a+2]+=nz;
+    normals[b]+=nx; normals[b+1]+=ny; normals[b+2]+=nz;
+    normals[c]+=nx; normals[c+1]+=ny; normals[c+2]+=nz;
+  }
+  for (let i = 0; i < N; i++) {
+    const j = i*3, l = Math.hypot(normals[j], normals[j+1], normals[j+2]);
+    if (l > 1e-8) { normals[j]/=l; normals[j+1]/=l; normals[j+2]/=l; }
+  }
+}
+
+/* ── Camera & matrices (hand-rolled, no libraries) ─────────────────────── */
+const cam = { theta: 0.35, phi: 1.32, radius: 2.85, tx: 0, ty: -0.22, tz: 0 };
+const FOV = 42 * Math.PI / 180;
+let eye = [0,0,0], fwd = [0,0,1], rightv = [1,0,0], upv = [0,1,0], aspect = 1;
+const VP = new Float32Array(16);
+
+function updateCamera() {
+  const sp = Math.sin(cam.phi), cp = Math.cos(cam.phi);
+  const st = Math.sin(cam.theta), ct = Math.cos(cam.theta);
+  eye = [cam.tx + cam.radius * sp * st, cam.ty + cam.radius * cp, cam.tz + cam.radius * sp * ct];
+
+  // Orthonormal camera basis. Getting a sign wrong here doesn't just move the
+  // camera — it flips the view rotation's determinant to -1 and the whole
+  // scene renders mirrored. forward → target, right = f × worldUp, up = r × f.
+  let fx = cam.tx - eye[0], fy = cam.ty - eye[1], fz = cam.tz - eye[2];
+  const fl = Math.hypot(fx, fy, fz); fx/=fl; fy/=fl; fz/=fl;
+  let rx = -fz, ry = 0, rz = fx;                        // cross(f, (0,1,0))
+  const rl = Math.hypot(rx, ry, rz) || 1; rx/=rl; ry/=rl; rz/=rl;
+  const ux = ry*fz - rz*fy, uy = rz*fx - rx*fz, uz = rx*fy - ry*fx; // cross(r, f)
+  fwd = [fx, fy, fz]; rightv = [rx, ry, rz]; upv = [ux, uy, uz];
+
+  // view matrix (lookAt)
+  const ex = eye[0], ey = eye[1], ez = eye[2];
+  const sxx = rx, sxy = ry, sxz = rz;
+  const uxx = upv[0], uxy = upv[1], uxz = upv[2];
+  const V = [
+    sxx, uxx, -fx, 0,
+    sxy, uxy, -fy, 0,
+    sxz, uxz, -fz, 0,
+    -(sxx*ex + sxy*ey + sxz*ez), -(uxx*ex + uxy*ey + uxz*ez), (fx*ex + fy*ey + fz*ez), 1
+  ];
+  // projection
+  const f = 1 / Math.tan(FOV / 2), near = 0.05, far = 60;
+  const P = [
+    f / aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (far + near) / (near - far), -1,
+    0, 0, (2 * far * near) / (near - far), 0
+  ];
+  // VP = P * V (column-major)
+  for (let c = 0; c < 4; c++)
+    for (let r = 0; r < 4; r++) {
+      let s = 0;
+      for (let k = 0; k < 4; k++) s += P[k*4 + r] * V[c*4 + k];
+      VP[c*4 + r] = s;
+    }
+}
+
+/* ── Interaction: grab cloth / orbit / zoom ────────────────────────────── */
+let grab = -1, grabDepth = 0, orbit = null;
+function pickParticle(mx, my) {
+  const rect = canvas.getBoundingClientRect();
+  let best = -1, bestD = 40 * 40; // 40 px pick radius
+  for (let i = 0; i < N; i++) {
+    const j = i*3;
+    const x = pos[j], y = pos[j+1], z = pos[j+2];
+    const cx = VP[0]*x + VP[4]*y + VP[8]*z  + VP[12];
+    const cy = VP[1]*x + VP[5]*y + VP[9]*z  + VP[13];
+    const cw = VP[3]*x + VP[7]*y + VP[11]*z + VP[15];
+    if (cw <= 0) continue;
+    const sx = (cx/cw * 0.5 + 0.5) * rect.width;
+    const sy = (1 - (cy/cw * 0.5 + 0.5)) * rect.height;
+    const d = (sx-mx)*(sx-mx) + (sy-my)*(sy-my);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+function mouseRay(mx, my) {
+  const rect = canvas.getBoundingClientRect();
+  const nx = (mx / rect.width) * 2 - 1;
+  const ny = 1 - (my / rect.height) * 2;
+  const tf = Math.tan(FOV / 2);
+  const dx = fwd[0] + rightv[0]*nx*tf*aspect + upv[0]*ny*tf;
+  const dy = fwd[1] + rightv[1]*nx*tf*aspect + upv[1]*ny*tf;
+  const dz = fwd[2] + rightv[2]*nx*tf*aspect + upv[2]*ny*tf;
+  const l = Math.hypot(dx, dy, dz);
+  return [dx/l, dy/l, dz/l];
+}
+canvas.addEventListener('pointerdown', (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  const p = pickParticle(e.clientX, e.clientY);
+  if (p >= 0 && invM[p] > 0) {
+    grab = p;
+    const j = p*3;
+    grabDepth = (pos[j]-eye[0])*fwd[0] + (pos[j+1]-eye[1])*fwd[1] + (pos[j+2]-eye[2])*fwd[2];
+  } else {
+    orbit = { x: e.clientX, y: e.clientY, th: cam.theta, ph: cam.phi };
+  }
+});
+let grabTarget = null;
+canvas.addEventListener('pointermove', (e) => {
+  if (grab >= 0) {
+    const d = mouseRay(e.clientX, e.clientY);
+    const t = grabDepth / (d[0]*fwd[0] + d[1]*fwd[1] + d[2]*fwd[2]);
+    grabTarget = [eye[0] + d[0]*t, eye[1] + d[1]*t, eye[2] + d[2]*t];
+  } else if (orbit) {
+    cam.theta = orbit.th - (e.clientX - orbit.x) * 0.005;
+    cam.phi   = Math.min(2.6, Math.max(0.35, orbit.ph - (e.clientY - orbit.y) * 0.005));
+  }
+});
+window.addEventListener('pointerup', () => { grab = -1; grabTarget = null; orbit = null; });
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  cam.radius = Math.min(6, Math.max(1.2, cam.radius * (1 + Math.sign(e.deltaY) * 0.08)));
+}, { passive: false });
+
+/* ── UI wiring ─────────────────────────────────────────────────────────── */
+const $ = (id) => document.getElementById(id);
+let windBase = 1.0, wireframe = false, sphereAuto = true, sphereX = 0;
+
+$('wind').addEventListener('input', (e) => { windBase = +e.target.value; $('windV').textContent = windBase.toFixed(1); });
+$('iters').addEventListener('input', (e) => { params.iterations = +e.target.value; $('itersV').textContent = e.target.value; });
+$('tear').addEventListener('click', (e) => {
+  params.tearFactor = params.tearFactor > 0 ? 0 : 3.0;
+  e.target.textContent = 'Tearing: ' + (params.tearFactor > 0 ? 'on' : 'off');
+  e.target.classList.toggle('on', params.tearFactor > 0);
+});
+$('wire').addEventListener('click', (e) => { wireframe = !wireframe; e.target.classList.toggle('on', wireframe); });
+const pinBtns = { row: $('pinRow'), five: $('pin5'), two: $('pin2'), none: $('pin0') };
+Object.entries(pinBtns).forEach(([mode, btn]) => btn.addEventListener('click', () => {
+  applyPinMode(mode);
+  Object.values(pinBtns).forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+}));
+$('sphAuto').addEventListener('click', (e) => {
+  sphereAuto = !sphereAuto;
+  e.target.classList.toggle('on', sphereAuto);
+  $('sphX').disabled = sphereAuto;
+});
+$('sphX').addEventListener('input', (e) => { sphereX = +e.target.value; $('sphXV').textContent = sphereX.toFixed(1); });
+$('reset').addEventListener('click', () => { resetCloth(); });
+
+/* ── Main loop: fixed-timestep physics, rAF rendering ──────────────────── */
+const SPH_R = 0.30;
+let sphere = [0, -0.76, 0.22];   // resting on the floor plane
+let accum = 0, lastT = performance.now() / 1000, simT = 0;
+let fpsEMA = 60, indicesDirty = true, frameCount = 0;
+
+resetCloth();
+$('hP').textContent = N.toLocaleString();
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(canvas.clientWidth * dpr);
+  canvas.height = Math.round(canvas.clientHeight * dpr);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  aspect = canvas.width / canvas.height;
+}
+window.addEventListener('resize', resize);
+resize();
+
+gl.enable(gl.DEPTH_TEST);
+gl.clearColor(0.055, 0.065, 0.085, 1);
+
+function frame() {
+  const now = performance.now() / 1000;
+  let dt = now - lastT; lastT = now;
+  fpsEMA = fpsEMA * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
+  accum += Math.min(dt, 0.05);
+
+  // sphere motion
+  if (sphereAuto) sphere[0] = 0.62 * Math.sin(simT * 0.55);
+  else sphere[0] = sphereX;
+
+  let sub = 0;
+  while (accum >= DT && sub < 4) {
+    const gust = windBase * (0.65 + 0.35 * Math.sin(simT * 1.3) * Math.sin(simT * 0.71 + 1.7));
+    if (windBase > 0.01) applyWind(0.18 * gust, 0, gust);
+    step();
+    collideSphere(sphere[0], sphere[1], sphere[2], SPH_R);
+    collideFloor();
+    if (grabTarget !== null && grab >= 0) {
+      const j = grab*3;
+      pos[j]=grabTarget[0]; pos[j+1]=grabTarget[1]; pos[j+2]=grabTarget[2];
+      prev[j]=grabTarget[0]; prev[j+1]=grabTarget[1]; prev[j+2]=grabTarget[2];
+    }
+    simT += DT; accum -= DT; sub++;
+  }
+  if (accum > DT * 4) accum = 0; // don't spiral after a tab-switch stall
+
+  if (tornDirty) { rebuildIndices(); tornDirty = false; }
+
+  computeNormals();
+  updateCamera();
+
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.uniformMatrix4fv(U.uVP, false, VP);
+  gl.uniform3f(U.uEye, eye[0], eye[1], eye[2]);
+  gl.uniform3f(U.uOffset, 0, 0, 0);
+  gl.uniform1f(U.uScale, 1);
+
+  // cloth
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, pos);
+  gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, normals);
+  if (indicesDirty) {
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, triBuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triIndex, gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(wireVao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, edgeBuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, edgeIndex, gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(vao);
+    indicesDirty = false;
+    let aliveAll = 0;
+    for (let c = 0; c < conCount; c++) aliveAll += conAlive[c];
+    $('hC').textContent = aliveAll.toLocaleString() + '/' + conCount.toLocaleString();
+    $('hT').textContent = aliveTris.toLocaleString();
+  }
+  if (!wireframe) {
+    gl.uniform1i(U.uMode, 0);
+    gl.disable(gl.CULL_FACE);
+    gl.drawElements(gl.TRIANGLES, aliveTris * 3, gl.UNSIGNED_SHORT, 0);
+  } else {
+    gl.bindVertexArray(wireVao);
+    gl.uniform1i(U.uMode, 2);
+    gl.uniform3f(U.uColor, 0.42, 0.55, 0.95);
+    gl.drawElements(gl.LINES, aliveEdges * 2, gl.UNSIGNED_SHORT, 0);
+  }
+
+  // floor
+  gl.bindVertexArray(floorVao);
+  gl.uniform1i(U.uMode, 1);
+  gl.uniform3f(U.uColor, 0.075, 0.088, 0.115);
+  gl.disable(gl.CULL_FACE);
+  gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+
+  // sphere
+  gl.bindVertexArray(sphVao);
+  gl.uniform1i(U.uMode, 1);
+  gl.uniform3f(U.uColor, 0.16, 0.18, 0.23);
+  gl.uniform3f(U.uOffset, sphere[0], sphere[1], sphere[2]);
+  gl.uniform1f(U.uScale, SPH_R);
+  gl.enable(gl.CULL_FACE);
+  gl.drawElements(gl.TRIANGLES, sph.I.length, gl.UNSIGNED_SHORT, 0);
+
+  if ((frameCount++ & 15) === 0) $('hF').textContent = fpsEMA.toFixed(0);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>
